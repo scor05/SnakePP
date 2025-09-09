@@ -10,9 +10,9 @@
 #include <cstdlib>
 
 
-static const int BOARD_H = 20; // alto útil (sin bordes)
-static const int BOARD_W = 40; // ancho útil (sin bordes)
-static const int HUD_HEIGHT = 4; // barra superior/ inferior para marcador / reloj
+static const int BOARD_H = 20; 
+static const int BOARD_W = 40;
+static const int HUD_HEIGHT = 4;
 
 
 static const char WALL_CH = '#';
