@@ -55,6 +55,60 @@ static vector<string> players;
 static string playerCreateBuf;
 static int playerSelectIdx = 0;
 
+
+// Funciones de manejo de Jugadores y Puntajes
+static void loadPlayers() {
+    players.clear();
+    ifstream f(PLAYERS_FILE);
+    string name;
+    while (getline(f, name)) {
+        if (!name.empty()) players.push_back(name);
+    }
+    if (players.empty()) players.push_back("Player");
+    if (find(players.begin(), players.end(), currentPlayer) == players.end())
+        currentPlayer = players.front();
+    playerSelectIdx = 0;
+}
+static void savePlayers() {
+    ofstream f(PLAYERS_FILE, ios::trunc);
+    for (auto &p : players) f << p << "\n";
+}
+static void loadHighscores() {
+    highscores.clear();
+    ifstream f(HIGHSCORES_FILE);
+    if (!f) return;
+    string line;
+    while (getline(f, line)) {
+        if (line.empty()) continue;
+        istringstream iss(line);
+        string name; int sc;
+        if (getline(iss, name, ';') && (iss >> sc)) {
+            highscores.push_back({name, sc});
+        }
+    }
+    sort(highscores.begin(), highscores.end(),
+         [](const ScoreEntry& a, const ScoreEntry& b){ return a.score > b.score; });
+    if (highscores.size() > 20) highscores.resize(20);
+}
+
+static void appendHighscore(const string& name, int sc) {
+    { ofstream f(HIGHSCORES_FILE, ios::app); if (f) f << name << ';' << sc << "\n"; }
+    highscores.push_back({name, sc});
+    sort(highscores.begin(), highscores.end(),
+         [](const ScoreEntry& a, const ScoreEntry& b){ return a.score > b.score; });
+    if (highscores.size() > 20) highscores.resize(20);
+}
+
+static int bestScoreFor(const string& name) {
+    int best = 0;
+    for (auto &e : highscores) if (e.name == name) best = max(best, e.score);
+    return best;
+}
+
+
+
+
+
 // Funciones de UI
 static void drawBoard() {
     werase(win_board);
@@ -157,6 +211,7 @@ static void drawGameOver() {
     mvprintw(maxY/2 + 2, maxX/2 - 14, "R: Reiniciar  |  Q: Salir a menú");
     refresh();
 }
+
 
 int main(){
     setlocale(LC_ALL, "");
