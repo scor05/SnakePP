@@ -226,3 +226,50 @@ int main(){
 
     return 0
 }
+
+// ===== Juego =====
+static void spawnFood() {
+    int h, w; getmaxyx(win_board, h, w);
+    food.x = (rand() % (w - 2)) + 1;
+    food.y = (rand() % (h - 2)) + 1;
+}
+
+static void initGame() {
+    snake.clear();
+    int h, w; getmaxyx(win_board, h, w);
+    snake.push_back({ w/2, h/2 });
+    score = 0;
+    dir = KEY_RIGHT;
+    spawnFood();
+    bestScore = bestScoreFor(currentPlayer);
+}
+
+static bool advance() {
+    int h, w; getmaxyx(win_board, h, w);
+    Point head = snake[0];
+
+    if      (dir == KEY_UP)    head.y--;
+    else if (dir == KEY_DOWN)  head.y++;
+    else if (dir == KEY_LEFT)  head.x--;
+    else if (dir == KEY_RIGHT) head.x++;
+
+  
+    if (head.x <= 0 || head.x >= w-1 || head.y <= 0 || head.y >= h-1)
+        return false;
+
+    bool eating = (head.x == food.x && head.y == food.y);
+
+    
+    if (!eating && !snake.empty()) snake.pop_back();
+
+    for (const auto& p : snake) if (p.x == head.x && p.y == head.y) return false;
+
+    snake.insert(snake.begin(), head);
+
+    if (eating) {
+        score++;
+        if (score > bestScore) bestScore = score;
+        spawnFood();
+    }
+    return true;
+}
