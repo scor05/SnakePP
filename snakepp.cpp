@@ -13,15 +13,14 @@
 #include <ctime>
 #include <sstream>
 #include <cstdlib>
+#include <locale.h>
 
 using namespace std;
-
 
 static const char SNAKE_HEAD_CH = 'O';
 static const char SNAKE_BODY_CH = 'o';
 static const char FOOD_CH = '*';
 static const int HUD_HEIGHT = 4;
-
 
 //Estados
 enum class GameState { MENU, INSTRUCTIONS, HIGHSCORES, PLAYER_CREATE, PLAYER_SELECT, 
@@ -35,10 +34,8 @@ static WINDOW* win_board = nullptr;
 static WINDOW* win_hud = nullptr;
 static int maxY = 0, maxX = 0;
 static GameState state = GameState::MENU;
-static bool running = true;
 static pthread_t input_thread;
 static pthread_mutex_t ui_mtx = PTHREAD_MUTEX_INITIALIZER;
-
 
 // Snake en sí
 static int dir = KEY_RIGHT;
@@ -48,19 +45,17 @@ static int speed_us = 100000; // aprox 10 fps
 
 static vector<ScoreEntry> highscores;
 static int bestScore = 0;
-static bool app_running = true;
+static volatile bool app_running = true;
 static GameState last_drawn = GameState::EXIT;
 
 // Para guardar puntajes destacados
 static int score = 0;
-static int best_score;
 static const char* HIGHSCORES_FILE = "highscores_snake.txt";
 static const char* PLAYERS_FILE    = "players_snake.txt";
 static string currentPlayer = "Player";
 static vector<string> players;
 static string playerCreateBuf;
 static int playerSelectIdx = 0;
-
 
 // Funciones de manejo de Jugadores y Puntajes
 static void loadPlayers() {
@@ -111,16 +106,12 @@ static int bestScoreFor(const string& name) {
     return best;
 }
 
-
-
-
-
 // Funciones de UI
 static void drawBoard() {
     werase(win_board);
     box(win_board, 0, 0);
     mvwaddch(win_board, food.row, food.column, FOOD_CH);
-    for (int i = 0; i < snake.size(); i++) {
+    for (size_t i = 0; i < snake.size(); i++) {
         char ch = (i == 0 ? SNAKE_HEAD_CH : SNAKE_BODY_CH);
         mvwaddch(win_board, snake[i].row, snake[i].column, ch);
     }
@@ -172,9 +163,8 @@ static void drawHighscores() {
         mvprintw(4, 5, "Sin registros. Juega y vuelve para ver tus puntajes.");
     } else {
         int row = 4;
-        for (int i = 0; i < highscores.size() && row < maxY-3; i++) {
-            // Colocar índice, nombre alineados a la izquierda, score a la derecha
-            mvprintw(row++, 5, "%2d) %-14s  %5d", i+1,
+        for (size_t i = 0; i < highscores.size() && row < maxY-3; i++) {
+            mvprintw(row++, 5, "%2zu) %-14s  %5d", i+1,
                      highscores[i].name.c_str(), highscores[i].score);
         }
     }
@@ -188,10 +178,10 @@ static void drawPlayerSelect() {
     box(stdscr, 0, 0);
     mvprintw(2, 3, "SELECCIONAR JUGADOR (Flechas Arriba/Abajo, Enter elegir, Q volver)");
     int startRow = 4;
-    for (int i = 0; i < players.size() && startRow + i < maxY - 2; i++) {
-        if (i == playerSelectIdx) attron(A_REVERSE); // A_REVERSE invierte colores de terminal del texto
+    for (size_t i = 0; i < players.size() && startRow + i < maxY - 2; i++) {
+        if ((int)i == playerSelectIdx) attron(A_REVERSE);
         mvprintw(startRow + i, 5, "%s", players[i].c_str());
-        if (i == playerSelectIdx) attroff(A_REVERSE);
+        if ((int)i == playerSelectIdx) attroff(A_REVERSE);
     }
     refresh();
     pthread_mutex_unlock(&ui_mtx);
@@ -202,7 +192,7 @@ static void drawPlayerCreate() {
     clear();
     box(stdscr, 0, 0);
     mvprintw(2, 3, "CREAR JUGADOR (Enter guardar, ESC/Q cancelar)");
-    mvprintw(4, 3, "Ingrese el nombre del jugador (1 a 16 caracteres): ");
+    mvprintw(4, 3, "Nombre (1..16): ");
     mvprintw(6, 5, "%s", playerCreateBuf.c_str());
     refresh();
     pthread_mutex_unlock(&ui_mtx);
@@ -218,8 +208,6 @@ static void drawGameOver() {
     refresh();
 }
 
-
-
 // ===== Juego =====
 static void spawnFood() {
     int h, w; getmaxyx(win_board, h, w);
@@ -230,7 +218,7 @@ static void spawnFood() {
 static void initGame() {
     snake.clear();
     int h, w; getmaxyx(win_board, h, w);
-    snake.push_back({ w/2, h/2 });
+    snake.push_back({ h/2, w/2 }); // row, column
     score = 0;
     dir = KEY_RIGHT;
     spawnFood();
@@ -246,13 +234,11 @@ static bool advance() {
     else if (dir == KEY_LEFT)  head.column--;
     else if (dir == KEY_RIGHT) head.column++;
 
-  
     if (head.column <= 0 || head.column >= w-1 || head.row <= 0 || head.row >= h-1)
         return false;
 
     bool eating = (head.column == food.column && head.row == food.row);
 
-    
     if (!eating && !snake.empty()) snake.pop_back();
 
     for (const auto& p : snake) if (p.column == head.column && p.row == head.row) return false;
@@ -267,30 +253,109 @@ static bool advance() {
     return true;
 }
 
-void* inputThread(void*) {
+static void* inputThread(void*) {
+    pthread_mutex_lock(&ui_mtx);
+    nodelay(stdscr, TRUE);
+    pthread_mutex_unlock(&ui_mtx);
+
     while (app_running) {
+        pthread_mutex_lock(&ui_mtx);
         int ch = getch();
-        if (state == GameState::RUNNING) {
-            if (ch == KEY_UP || ch == 'w' || ch == 'W') dir = KEY_UP;
-            else if (ch == KEY_DOWN || ch == 's' || ch == 'S') dir = KEY_DOWN;
-            else if (ch == KEY_LEFT || ch == 'a' || ch == 'A') dir = KEY_LEFT;
-            else if (ch == KEY_RIGHT || ch == 'd' || ch == 'D') dir = KEY_RIGHT;
-            else if (ch == 'p' || ch == 'P') state = GameState::PAUSED;
-            else if (ch == 'q' || ch == 'Q') state = GameState::MENU;
-        } else if (state == GameState::MENU) {
-            if (ch == '1') { initGame(); state = GameState::RUNNING; }
-            else if (ch == '2') state = GameState::INSTRUCTIONS;
-            else if (ch == '3') state = GameState::HIGHSCORES;
-            else if (ch == '4') state = GameState::PLAYER_SELECT;
-            else if (ch == '5') { playerCreateBuf.clear(); state = GameState::PLAYER_CREATE; }
-            else if (ch == '6' || ch == 'q' || ch == 'Q') state = GameState::EXIT;
-        } else if (state == GameState::INSTRUCTIONS || state == GameState::HIGHSCORES) {
-            if (ch == 'q' || ch == 'Q') state = GameState::MENU;
-        } else if (state == GameState::GAMEOVER) {
-            if (ch == 'r' || ch == 'R') { initGame(); state = GameState::RUNNING; }
-            else if (ch == 'q' || ch == 'Q') state = GameState::MENU;
+        pthread_mutex_unlock(&ui_mtx);
+        if (ch == ERR) { usleep(5000); continue; }
+
+        bool isBack = (ch == KEY_BACKSPACE || ch == 127 || ch == 8);
+
+        switch (state) {
+            case GameState::MENU:
+                if      (ch == '1') { initGame(); state = GameState::RUNNING; }
+                else if (ch == '2') { state = GameState::INSTRUCTIONS; last_drawn = GameState::EXIT; }
+                else if (ch == '3') { state = GameState::HIGHSCORES;   last_drawn = GameState::EXIT; }
+                else if (ch == '4') { state = GameState::PLAYER_SELECT; last_drawn = GameState::EXIT; }
+                else if (ch == '5') { playerCreateBuf.clear(); state = GameState::PLAYER_CREATE; last_drawn = GameState::EXIT; }
+                else if (ch == '6' || ch == 'q' || ch == 'Q') { state = GameState::EXIT; }
+                break;
+
+            case GameState::INSTRUCTIONS:
+            case GameState::HIGHSCORES:
+                if (ch == 'q' || ch == 'Q') { state = GameState::MENU; last_drawn = GameState::EXIT; }
+                break;
+
+            case GameState::PLAYER_SELECT:
+                if (ch == KEY_UP)    { if (playerSelectIdx > 0) playerSelectIdx--; last_drawn = GameState::EXIT; }
+                if (ch == KEY_DOWN)  { if (playerSelectIdx < (int)players.size()-1) playerSelectIdx++; last_drawn = GameState::EXIT; }
+                if (ch == '\n' || ch == KEY_ENTER) {
+                    if (!players.empty()) {
+                        currentPlayer = players[playerSelectIdx];
+                        bestScore = bestScoreFor(currentPlayer);
+                    }
+                    state = GameState::MENU; last_drawn = GameState::EXIT;
+                }
+                if (ch == 'q' || ch == 'Q' || ch == 27 /*ESC*/) { state = GameState::MENU; last_drawn = GameState::EXIT; }
+                break;
+
+            case GameState::PLAYER_CREATE:
+                if (ch == '\n' || ch == KEY_ENTER) {
+                    string s = playerCreateBuf;
+                    while (!s.empty() && (s.back()==' ' || s.back()=='\t')) s.pop_back();
+                    size_t i0 = 0; while (i0 < s.size() && (s[i0]==' ' || s[i0]=='\t')) ++i0;
+                    s = s.substr(i0);
+                    if (!s.empty()) {
+                        if (find(players.begin(), players.end(), s) == players.end()) {
+                            players.push_back(s);
+                            savePlayers();
+                        }
+                        currentPlayer = s;
+                        bestScore = bestScoreFor(currentPlayer);
+                    }
+                    playerCreateBuf.clear();
+                    state = GameState::MENU; last_drawn = GameState::EXIT;
+                } else if (isBack) {
+                    if (!playerCreateBuf.empty()) playerCreateBuf.pop_back();
+                    last_drawn = GameState::EXIT;
+                } else if (ch == 'q' || ch == 'Q' || ch == 27 /*ESC*/) {
+                    playerCreateBuf.clear();
+                    state = GameState::MENU; last_drawn = GameState::EXIT;
+                } else if (ch >= 32 && ch <= 126) {
+                    if (ch == ';') ch = '_';
+                    if ((int)playerCreateBuf.size() < 16) {
+                        playerCreateBuf.push_back((char)ch);
+                        last_drawn = GameState::EXIT;
+                    }
+                }
+                break;
+
+            case GameState::RUNNING:
+                if ((ch == KEY_UP   || ch == 'w') && dir != KEY_DOWN)  dir = KEY_UP;
+                if ((ch == KEY_DOWN || ch == 's') && dir != KEY_UP)    dir = KEY_DOWN;
+                if ((ch == KEY_LEFT || ch == 'a') && dir != KEY_RIGHT) dir = KEY_LEFT;
+                if ((ch == KEY_RIGHT|| ch == 'd') && dir != KEY_LEFT)  dir = KEY_RIGHT;
+
+                if (ch == 'p' || ch == 'P') { state = GameState::PAUSED; last_drawn = GameState::EXIT; }
+                if (ch == 'q' || ch == 'Q') {
+                    appendHighscore(currentPlayer, score);
+                    state = GameState::MENU; last_drawn = GameState::EXIT;
+                }
+                break;
+
+            case GameState::PAUSED:
+                if (ch == 'p' || ch == 'P') { state = GameState::RUNNING; last_drawn = GameState::EXIT; }
+                if (ch == 'q' || ch == 'Q') {
+                    appendHighscore(currentPlayer, score);
+                    state = GameState::MENU; last_drawn = GameState::EXIT;
+                }
+                break;
+
+            case GameState::GAMEOVER:
+                if (ch == 'r' || ch == 'R') { initGame(); state = GameState::RUNNING; last_drawn = GameState::EXIT; }
+                if (ch == 'q' || ch == 'Q') { state = GameState::MENU; last_drawn = GameState::EXIT; }
+                break;
+
+            case GameState::EXIT:
+            default:
+                app_running = false;
+                break;
         }
-        usleep(16000);
     }
     return nullptr;
 }
@@ -298,6 +363,7 @@ void* inputThread(void*) {
 int main(){
     setlocale(LC_ALL, "");
     srand(time(NULL));
+    initscr();
     noecho();
     curs_set(0);
     keypad(stdscr, TRUE);
@@ -316,27 +382,27 @@ int main(){
         if (state != last_drawn) {
             if      (state == GameState::MENU)          drawMenu();
             else if (state == GameState::INSTRUCTIONS)  drawInstructions();
-            else if (state == GameState :: HIGHSCORES)    drawHighscores();
-            else if (state == GameState :: PLAYER_SELECT) drawPlayerSelect();
-            else if (state == GameState :: PLAYER_CREATE) drawPlayerCreate();
-            else if (state == GameState :: GAMEOVER)      drawGameOver();
+            else if (state == GameState::HIGHSCORES)    drawHighscores();
+            else if (state == GameState::PLAYER_SELECT) drawPlayerSelect();
+            else if (state == GameState::PLAYER_CREATE) drawPlayerCreate();
+            else if (state == GameState::GAMEOVER)      drawGameOver();
             last_drawn = state;
         }
 
         if (state == GameState::RUNNING) {
             if (!advance()) {
                 appendHighscore(currentPlayer, score);
-                state == GameState::GAMEOVER; last_drawn = GameState::EXIT;
+                state = GameState::GAMEOVER; last_drawn = GameState::EXIT;
             } else {
                 drawBoard();
                 drawHUD();
             }
             usleep(speed_us);
-        } else if (state == GameState :: PLAYER_SELECT || state == GameState:: PLAYER_CREATE) {
-            if (state == GameState :: PLAYER_SELECT)  drawPlayerSelect();
-            if (state == GameState ::PLAYER_CREATE)  drawPlayerCreate();
+        } else if (state == GameState::PLAYER_SELECT || state == GameState::PLAYER_CREATE) {
+            if (state == GameState::PLAYER_SELECT)  drawPlayerSelect();
+            if (state == GameState::PLAYER_CREATE)  drawPlayerCreate();
             usleep(16000);
-        } else if (state == GameState :: EXIT) {
+        } else if (state == GameState::EXIT) {
             app_running = false;
         } else {
             usleep(16000);
@@ -348,5 +414,4 @@ int main(){
     delwin(win_board);
     endwin();
     return 0;
-
 }
