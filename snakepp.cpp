@@ -213,19 +213,6 @@ static void drawGameOver() {
 }
 
 
-int main(){
-    setlocale(LC_ALL, "");
-    srand(time(NULL));
-    noecho();
-    curs_set(0);
-    keypad(stdscr, TRUE);
-    getmaxyx(stdscr, maxY, maxX);
-
-    win_board = newwin(maxY - HUD_HEIGHT, maxX, 0, 0);
-    win_hud   = newwin(HUD_HEIGHT, maxX, maxY - HUD_HEIGHT, 0);
-
-    return 0
-}
 
 // ===== Juego =====
 static void spawnFood() {
@@ -272,4 +259,61 @@ static bool advance() {
         spawnFood();
     }
     return true;
+}
+
+int main(){
+    setlocale(LC_ALL, "");
+    srand(time(NULL));
+    noecho();
+    curs_set(0);
+    keypad(stdscr, TRUE);
+    getmaxyx(stdscr, maxY, maxX);
+
+    win_board = newwin(maxY - HUD_HEIGHT, maxX, 0, 0);
+    win_hud   = newwin(HUD_HEIGHT, maxX, maxY - HUD_HEIGHT, 0);
+
+    return 0
+
+    loadPlayers();
+    loadHighscores();
+    bestScore = bestScoreFor(currentPlayer);
+
+    pthread_create(&input_thread, nullptr, inputThread, nullptr);
+
+    while (app_running) {
+        if (state != last_drawn) {
+            if      (state == MENU)          drawMenu();
+            else if (state == INSTRUCTIONS)  drawInstructions();
+            else if (state == HIGHSCORES)    drawHighscores();
+            else if (state == PLAYER_SELECT) drawPlayerSelect();
+            else if (state == PLAYER_CREATE) drawPlayerCreate();
+            else if (state == GAMEOVER)      drawGameOver();
+            last_drawn = state;
+        }
+
+        if (state == RUNNING) {
+            if (!advance()) {
+                appendHighscore(currentPlayer, score);
+                state = GAMEOVER; last_drawn = EXIT;
+            } else {
+                drawBoard();
+                drawHUD();
+            }
+            usleep(speed_us);
+        } else if (state == PLAYER_SELECT || state == PLAYER_CREATE) {
+            if (state == PLAYER_SELECT)  drawPlayerSelect();
+            if (state == PLAYER_CREATE)  drawPlayerCreate();
+            usleep(16000);
+        } else if (state == EXIT) {
+            app_running = false;
+        } else {
+            usleep(16000);
+        }
+    }
+
+    pthread_join(input_thread, nullptr);
+    delwin(win_hud);
+    delwin(win_board);
+    endwin();
+   
 }
