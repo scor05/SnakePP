@@ -40,16 +40,16 @@ static pthread_mutex_t ui_mtx = PTHREAD_MUTEX_INITIALIZER;
 static int maxY = 0, maxX = 0;
 
 // Snake en sí
-static static int dir = KEY_RIGHT
+static int dir = KEY_RIGHT;
 static vector<Point> snake;
-static static Point food;
+static Point food;
 static int speed_us = 100000; // aprox 10 fps
 
 // Para guardar puntajes destacados
 static int score = 0;
 static int best_score;
-static static const char* HIGHSCORES_FILE = "highscores_snake.txt";
-static static const char* PLAYERS_FILE    = "players_snake.txt";
+static const char* HIGHSCORES_FILE = "highscores_snake.txt";
+static const char* PLAYERS_FILE    = "players_snake.txt";
 static string currentPlayer = "Player";
 static vector<string> players;
 static string playerCreateBuf;
