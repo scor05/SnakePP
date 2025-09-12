@@ -315,5 +315,5 @@ int main(){
     delwin(win_hud);
     delwin(win_board);
     endwin();
-   
+    
 }
