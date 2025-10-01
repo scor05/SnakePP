@@ -46,6 +46,7 @@ static Point food;
 static int speed_us = 100000; // aprox 10 fps
 
 // Obstáculos
+static pthread_t obstacle_thread;
 static pthread_mutex_t game_mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t obst_mtx = PTHREAD_MUTEX_INITIALIZER; 
 static pthread_cond_t obst_cond = PTHREAD_COND_INITIALIZER;
@@ -120,6 +121,13 @@ static int bestScoreFor(const string& name) {
 static void drawBoard() {
     werase(win_board);
     box(win_board, 0, 0);
+
+    // obstáculos
+    pthread_mutex_lock(&game_mtx);
+    for (const auto& p : obstacles) mvwaddch(win_board, p.row, p.column, OBSTACLE_CH);
+    pthread_mutex_unlock(&game_mtx);
+
+    // snake y comida
     mvwaddch(win_board, food.row, food.column, FOOD_CH);
     for (size_t i = 0; i < snake.size(); i++) {
         char ch = (i == 0 ? SNAKE_HEAD_CH : SNAKE_BODY_CH);
@@ -240,8 +248,18 @@ static void requestObstacle() {
 
 static void spawnFood() {
     int h, w; getmaxyx(win_board, h, w);
-    food.column = (rand() % (w - 2)) + 1;
-    food.row = (rand() % (h - 2)) + 1;
+    Point p;
+    // revisar que no se genere comida en un obstáculo
+    for (int attempt = 0; attempt < 200; attempt++){
+        p.column = (rand() % (w - 2)) + 1;
+        p.row = (rand() % (h - 2)) + 1;
+
+        pthread_mutex_lock(&game_mtx);
+        bool bad = isPointOnObstacle(p) || isPointOnSnake(p);
+        pthread_mutex_unlock(&game_mtx);
+
+        if (!bad) { food = p; return; }
+    }
 }
 
 static void initGame() {
@@ -263,8 +281,15 @@ static bool advance() {
     else if (dir == KEY_LEFT)  head.column--;
     else if (dir == KEY_RIGHT) head.column++;
 
+    // paredes del juego
     if (head.column <= 0 || head.column >= w-1 || head.row <= 0 || head.row >= h-1)
         return false;
+
+    // choque con obstáculo
+    pthread_mutex_lock(&game_mtx);
+    bool hit_obstacle = isPointOnObstacle(head);
+    pthread_mutex_unlock(&game_mtx);
+    if (hit_obstacle) return false;
 
     bool eating = (head.column == food.column && head.row == food.row);
 
@@ -277,6 +302,7 @@ static bool advance() {
     if (eating) {
         score++;
         if (score > bestScore) bestScore = score;
+        requestObstacle();
         spawnFood();
     }
     return true;
@@ -299,7 +325,7 @@ static void* obstacleThread(void*) {
         pthread_mutex_unlock(&ui_mtx);
 
         bool placed = false;
-        for (int attempt = 0; attempt < 100 && !placed; ++attempt) {
+        for (int attempt = 0; attempt < 100 && !placed; attempt++) {
             int len = 2 + (rand() % 2); // 2 o 3 unidades de longitud aleatoriamente
             bool horizontal = (rand() % 2) == 0; // linea horizontal o vertical
             int r = (rand() % (h - 2)) + 1; // mod para que esté dentro del rango
@@ -312,7 +338,7 @@ static void* obstacleThread(void*) {
             }
 
             vector<Point> cells;
-            for (int i = 0; i < len; ++i) {
+            for (int i = 0; i < len; i++) {
                 cells.push_back({ r + (horizontal ? 0 : i), c + (horizontal ? i : 0) });
             }
 
@@ -378,7 +404,7 @@ static void* inputThread(void*) {
                 if (ch == '\n' || ch == KEY_ENTER) {
                     string s = playerCreateBuf;
                     while (!s.empty() && (s.back()==' ' || s.back()=='\t')) s.pop_back();
-                    size_t i0 = 0; while (i0 < s.size() && (s[i0]==' ' || s[i0]=='\t')) ++i0;
+                    size_t i0 = 0; while (i0 < s.size() && (s[i0]==' ' || s[i0]=='\t')) i0++;
                     s = s.substr(i0);
                     if (!s.empty()) {
                         if (find(players.begin(), players.end(), s) == players.end()) {
@@ -457,6 +483,7 @@ int main(){
     bestScore = bestScoreFor(currentPlayer);
 
     pthread_create(&input_thread, nullptr, inputThread, nullptr);
+    pthread_create(&obstacle_thread, nullptr, obstacleThread, nullptr);
 
     while (app_running) {
         if (state != last_drawn) {
@@ -490,6 +517,13 @@ int main(){
     }
 
     pthread_join(input_thread, nullptr);
+
+    pthread_mutex_lock(&obst_mtx);
+    app_running = false;
+    pthread_cond_signal(&obst_cond);
+    pthread_mutex_unlock(&obst_mtx);
+
+    pthread_join(obstacle_thread, nullptr);
     delwin(win_hud);
     delwin(win_board);
     endwin();
