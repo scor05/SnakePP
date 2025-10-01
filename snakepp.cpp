@@ -20,6 +20,7 @@ using namespace std;
 static const char SNAKE_HEAD_CH = 'O';
 static const char SNAKE_BODY_CH = 'o';
 static const char FOOD_CH = '*';
+static const char OBSTACLE_CH = '#';
 static const int HUD_HEIGHT = 4;
 
 //Estados
@@ -37,11 +38,18 @@ static GameState state = GameState::MENU;
 static pthread_t input_thread;
 static pthread_mutex_t ui_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-// Snake en sí
+// Snake
 static int dir = KEY_RIGHT;
 static vector<Point> snake;
+static vector<Point> obstacles;
 static Point food;
 static int speed_us = 100000; // aprox 10 fps
+
+// Obstáculos
+static pthread_mutex_t game_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t obst_mtx = PTHREAD_MUTEX_INITIALIZER; 
+static pthread_cond_t obst_cond = PTHREAD_COND_INITIALIZER;
+static volatile int obst_requests = 0;
 
 static vector<ScoreEntry> highscores;
 static int bestScore = 0;
@@ -70,10 +78,12 @@ static void loadPlayers() {
         currentPlayer = players.front();
     playerSelectIdx = 0;
 }
+
 static void savePlayers() {
     ofstream f(PLAYERS_FILE, ios::trunc);
     for (auto &p : players) f << p << "\n";
 }
+
 static void loadHighscores() {
     highscores.clear();
     ifstream f(HIGHSCORES_FILE);
@@ -150,7 +160,8 @@ static void drawInstructions() {
     mvprintw(6,3, "  O = Cabeza de serpiente");
     mvprintw(7,3, "  o = Cuerpo de serpiente (y cola)");
     mvprintw(8,3, "  * = Comida");
-    mvprintw(9,3, "  Paredes delimitadas por líneas");
+    mvprintw(9,3, "  # = Obstáculo (se genera cada vez que la serpiente come)");
+    mvprintw(10,3, "  Paredes delimitadas por líneas");
     mvprintw(maxY-3,3,"Presione Q para volver al menú.");
     refresh();
 }
@@ -209,6 +220,24 @@ static void drawGameOver() {
 }
 
 // ===== Juego =====
+static bool isPointOnSnake(const Point& p) {
+    for (const auto& s : snake) if (s.row == p.row && s.column == p.column) return true;
+    return false;
+}
+
+static bool isPointOnObstacle(const Point& p) {
+    for (const auto& o : obstacles) if (o.row == p.row && o.column == p.column) return true;
+    return false;
+}
+
+// para llamar cada vez que se hace eat()
+static void requestObstacle() {
+    pthread_mutex_lock(&obst_mtx);
+    obst_requests++;
+    pthread_cond_signal(&obst_cond);
+    pthread_mutex_unlock(&obst_mtx);
+}
+
 static void spawnFood() {
     int h, w; getmaxyx(win_board, h, w);
     food.column = (rand() % (w - 2)) + 1;
@@ -252,6 +281,57 @@ static bool advance() {
     }
     return true;
 }
+
+static void* obstacleThread(void*) {
+    while (app_running) {
+        // solo actúa el hilo cuando haya una solicitud de obstáculo (cuando come el snake)
+        pthread_mutex_lock(&obst_mtx);
+        while (app_running && obst_requests == 0)
+            pthread_cond_wait(&obst_cond, &obst_mtx);
+
+        if (!app_running) { pthread_mutex_unlock(&obst_mtx); break; }
+        obst_requests--;
+        pthread_mutex_unlock(&obst_mtx);
+
+        int h, w;
+        pthread_mutex_lock(&ui_mtx);
+        getmaxyx(win_board, h, w);
+        pthread_mutex_unlock(&ui_mtx);
+
+        bool placed = false;
+        for (int attempt = 0; attempt < 100 && !placed; ++attempt) {
+            int len = 2 + (rand() % 2); // 2 o 3 unidades de longitud aleatoriamente
+            bool horizontal = (rand() % 2) == 0; // linea horizontal o vertical
+            int r = (rand() % (h - 2)) + 1; // mod para que esté dentro del rango
+            int c = (rand() % (w - 2)) + 1;
+
+            if (horizontal) {
+                if (c + len - 1 >= w - 1) c = (w - 1) - len;
+            } else {
+                if (r + len - 1 >= h - 1) r = (h - 1) - len;
+            }
+
+            vector<Point> cells;
+            for (int i = 0; i < len; ++i) {
+                cells.push_back({ r + (horizontal ? 0 : i), c + (horizontal ? i : 0) });
+            }
+
+            pthread_mutex_lock(&game_mtx);
+            bool ok = true;
+            for (const auto& p : cells) {
+                if (p.row <= 0 || p.row >= h - 1 || p.column <= 0 || p.column >= w - 1) { ok = false; break; }
+                if (isPointOnSnake(p) || isPointOnObstacle(p) || (p.row == food.row && p.column == food.column)) { ok = false; break; }
+            }
+            if (ok) {
+                obstacles.insert(obstacles.end(), cells.begin(), cells.end());
+                placed = true;
+            }
+            pthread_mutex_unlock(&game_mtx);
+        }
+    }
+    return nullptr;
+}
+
 
 static void* inputThread(void*) {
     pthread_mutex_lock(&ui_mtx);
