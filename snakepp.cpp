@@ -14,6 +14,7 @@
 #include <sstream>
 #include <cstdlib>
 #include <locale.h>
+#include <sys/time.h>
 
 using namespace std;
 
@@ -51,6 +52,14 @@ static pthread_mutex_t game_mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t obst_mtx = PTHREAD_MUTEX_INITIALIZER; 
 static pthread_cond_t obst_cond = PTHREAD_COND_INITIALIZER;
 static volatile int obst_requests = 0;
+
+// MODO TURBOO
+static int SPEED_FPS_NORMAL = 10;
+static int SPEED_FPS_BOOST = 25;
+static int SPEED_US_NORMAL;
+static int SPEED_US_BOOST;
+static const int BOOST_TIMER_US = 120; // ms desde que se suelte la L
+static long long boost_until_us = 0;
 
 static vector<ScoreEntry> highscores;
 static int bestScore = 0;
@@ -163,7 +172,7 @@ static void drawInstructions() {
     clear();
     box(stdscr, 0,0);
     mvprintw(2,3, "Objetivo: mover la serpiente (cabeza 'O') y comer '*' para sumar puntos.");
-    mvprintw(4,3, "Controles: Flechas o WASD para mover. 'Q' para volver al menu.");
+    mvprintw(4,3, "Controles: Flechas o WASD para mover, 'L' para acelerar, 'Q' para volver al menu.");
     mvprintw(6,3, "Elementos ASCII:");
     mvprintw(6,3, "  O = Cabeza de serpiente");
     mvprintw(7,3, "  o = Cuerpo de serpiente (y cola)");
@@ -227,6 +236,21 @@ static void drawGameOver() {
     refresh();
 }
 
+// ===== Cálculos =====
+static int fps_to_us(int fps) {
+    // 1s = 10^6 us
+    return (fps > 0) ? (1000000 / fps) : 100000;
+}
+
+static long long now_us() {
+    timeval tv; gettimeofday(&tv, nullptr);
+    return (long long)tv.tv_sec * 1000000LL + tv.tv_usec;
+}
+
+static bool boostActive() {
+    return now_us() < boost_until_us;
+}
+
 // ===== Juego =====
 static bool isPointOnSnake(const Point& p) {
     for (const auto& s : snake) if (s.row == p.row && s.column == p.column) return true;
@@ -264,6 +288,9 @@ static void spawnFood() {
 
 static void initGame() {
     snake.clear();
+    pthread_mutex_lock(&game_mtx);
+    obstacles.clear();
+    pthread_mutex_unlock(&game_mtx);
     int h, w; getmaxyx(win_board, h, w);
     snake.push_back({ h/2, w/2 }); // row, column
     score = 0;
@@ -437,6 +464,10 @@ static void* inputThread(void*) {
                 if ((ch == KEY_LEFT || ch == 'a') && dir != KEY_RIGHT) dir = KEY_LEFT;
                 if ((ch == KEY_RIGHT|| ch == 'd') && dir != KEY_LEFT)  dir = KEY_RIGHT;
 
+                if (ch == 'l'){
+                    boost_until_us =  now_us() + (long long) BOOST_TIMER_US * 1000LL;
+                }
+
                 if (ch == 'p' || ch == 'P') { state = GameState::PAUSED; last_drawn = GameState::EXIT; }
                 if (ch == 'q' || ch == 'Q') {
                     appendHighscore(currentPlayer, score);
@@ -474,9 +505,11 @@ int main(){
     curs_set(0);
     keypad(stdscr, TRUE);
     getmaxyx(stdscr, maxY, maxX);
+    SPEED_US_BOOST = fps_to_us(SPEED_FPS_BOOST);
+    SPEED_US_NORMAL = fps_to_us(SPEED_FPS_NORMAL);
 
     win_board = newwin(maxY - HUD_HEIGHT, maxX, 0, 0);
-    win_hud   = newwin(HUD_HEIGHT, maxX, maxY - HUD_HEIGHT, 0);
+    win_hud = newwin(HUD_HEIGHT, maxX, maxY - HUD_HEIGHT, 0);
 
     loadPlayers();
     loadHighscores();
@@ -504,6 +537,7 @@ int main(){
                 drawBoard();
                 drawHUD();
             }
+            speed_us = boostActive() ? SPEED_US_BOOST: SPEED_US_NORMAL;
             usleep(speed_us);
         } else if (state == GameState::PLAYER_SELECT || state == GameState::PLAYER_CREATE) {
             if (state == GameState::PLAYER_SELECT)  drawPlayerSelect();
